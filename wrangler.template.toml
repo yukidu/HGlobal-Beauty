@@ -1,5 +1,5 @@
 name = "starbeauty"
-main = "worker/index.js"
+main = "worker/profileSyncWrapper.js"
 compatibility_date = "2026-10-10"
 
 [assets]
