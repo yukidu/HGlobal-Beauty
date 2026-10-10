@@ -1,0 +1,2 @@
+-- StarBeauty schema is created automatically by worker/index.js at runtime.
+-- This file is kept as a documentation/operations entry point.
