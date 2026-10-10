@@ -3,15 +3,17 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const guard = readFileSync(new URL('../worker/lineSignatureGuard.js', import.meta.url), 'utf8');
+const contractWrapper = readFileSync(new URL('../worker/echoContractWrapper.js', import.meta.url), 'utf8');
 const wrapper = readFileSync(new URL('../worker/profileSyncWrapper.js', import.meta.url), 'utf8');
 const bootstrap = readFileSync(new URL('../public/bootstrap.js', import.meta.url), 'utf8');
 const index = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const wrangler = readFileSync(new URL('../wrangler.template.toml', import.meta.url), 'utf8');
 const deploy = readFileSync(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
 
-test('StarBeauty deploys through LINE signature guard then profile sync wrapper', () => {
+test('StarBeauty deploys through LINE signature guard, Echo contract adapter, then profile sync wrapper', () => {
   assert.match(wrangler, /main\s*=\s*"worker\/lineSignatureGuard\.js"/);
-  assert.match(guard, /import app from '\.\/profileSyncWrapper\.js'/);
+  assert.match(guard, /import app from '\.\/echoContractWrapper\.js'/);
+  assert.match(contractWrapper, /import app from '\.\/profileSyncWrapper\.js'/);
   assert.match(guard, /x-line-signature/);
   assert.match(guard, /HMAC/);
   assert.match(guard, /SHA-256/);
