@@ -22,15 +22,29 @@ jobs:
         with:
           node-version: 22
       - run: npm install --no-audit --no-fund
-      - name: Syntax checks
+      - name: Syntax and regression checks
         run: npm run check
-      - name: Verify Cloudflare credentials
+      - name: Check Cloudflare credentials
+        id: cloudflare
+        shell: bash
         run: |
-          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-            echo "Missing GitHub secret: CLOUDFLARE_API_TOKEN"
+          if [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "Cloudflare token is available."
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "CLOUDFLARE_API_TOKEN is not configured yet; checks passed and deployment is skipped safely."
+          fi
+      - name: Verify Cloudflare account ID
+        if: steps.cloudflare.outputs.ready == 'true'
+        shell: bash
+        run: |
+          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "Missing GitHub secret: CLOUDFLARE_ACCOUNT_ID"
             exit 1
           fi
       - name: Provision D1 and R2
+        if: steps.cloudflare.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -45,8 +59,10 @@ jobs:
           npx wrangler r2 bucket create starbeauty-files >/tmp/r2-create.log 2>&1 || true
           node -e "const fs=require('fs');let s=fs.readFileSync('wrangler.template.toml','utf8');s=s.replace('__D1_DATABASE_ID__',process.argv[1]);fs.writeFileSync('wrangler.generated.toml',s)" "$D1_ID"
       - name: Deploy Worker
+        if: steps.cloudflare.outputs.ready == 'true'
         run: npx wrangler deploy --config wrangler.generated.toml
       - name: Configure LINE secrets when present
+        if: steps.cloudflare.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
