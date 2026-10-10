@@ -1,11 +1,11 @@
 {
   "name": "starbeauty",
   "private": true,
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "美力之星 StarBeauty 學員作業與 LINE 繳交平台",
   "type": "module",
   "scripts": {
-    "check": "node --check worker/index.js && node --check worker/profileSyncWrapper.js && node --check public/bootstrap.js && node --check public/app.js && node --test tests/*.test.mjs"
+    "check": "node --check worker/index.js && node --check worker/profileSyncWrapper.js && node --check worker/lineSignatureGuard.js && node --check public/bootstrap.js && node --check public/app.js && node --test tests/*.test.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"

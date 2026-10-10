@@ -1,5 +1,5 @@
 name = "starbeauty"
-main = "worker/profileSyncWrapper.js"
+main = "worker/lineSignatureGuard.js"
 compatibility_date = "2026-10-10"
 
 [assets]
