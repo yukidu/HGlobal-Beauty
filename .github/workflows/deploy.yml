@@ -1,0 +1,54 @@
+name: Deploy starbeauty
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      LINE_CHANNEL_SECRET: ${{ secrets.LINE_CHANNEL_SECRET }}
+      LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - name: Syntax checks
+        run: npm run check
+      - name: Verify Cloudflare credentials
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "Missing GitHub secret: CLOUDFLARE_API_TOKEN"
+            exit 1
+          fi
+      - name: Provision D1 and R2
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 list --json > /tmp/starbeauty-d1.json
+          D1_ID=$(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/starbeauty-d1.json','utf8'));const a=Array.isArray(x)?x:(x.result||[]);const r=a.find(v=>v.name==='starbeauty_db');process.stdout.write(r?.uuid||r?.id||'')")
+          if [ -z "$D1_ID" ]; then
+            npx wrangler d1 create starbeauty_db
+            npx wrangler d1 list --json > /tmp/starbeauty-d1.json
+            D1_ID=$(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/starbeauty-d1.json','utf8'));const a=Array.isArray(x)?x:(x.result||[]);const r=a.find(v=>v.name==='starbeauty_db');process.stdout.write(r?.uuid||r?.id||'')")
+          fi
+          test -n "$D1_ID"
+          npx wrangler r2 bucket create starbeauty-files >/tmp/r2-create.log 2>&1 || true
+          node -e "const fs=require('fs');let s=fs.readFileSync('wrangler.template.toml','utf8');s=s.replace('__D1_DATABASE_ID__',process.argv[1]);fs.writeFileSync('wrangler.generated.toml',s)" "$D1_ID"
+      - name: Deploy Worker
+        run: npx wrangler deploy --config wrangler.generated.toml
+      - name: Configure LINE secrets when present
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "$LINE_CHANNEL_SECRET" ]; then printf '%s' "$LINE_CHANNEL_SECRET" | npx wrangler secret put LINE_CHANNEL_SECRET --config wrangler.generated.toml; fi
+          if [ -n "$LINE_CHANNEL_ACCESS_TOKEN" ]; then printf '%s' "$LINE_CHANNEL_ACCESS_TOKEN" | npx wrangler secret put LINE_CHANNEL_ACCESS_TOKEN --config wrangler.generated.toml; fi
