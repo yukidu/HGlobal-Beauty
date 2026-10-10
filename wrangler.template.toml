@@ -1,0 +1,19 @@
+name = "starbeauty"
+main = "worker/index.js"
+compatibility_date = "2026-10-10"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "starbeauty_db"
+database_id = "__D1_DATABASE_ID__"
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "starbeauty-files"
+
+[vars]
+ECHO_BASE_URL = "https://echostars.yukidu.workers.dev"
