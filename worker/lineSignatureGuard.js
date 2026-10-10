@@ -1,4 +1,4 @@
-import app from './profileSyncWrapper.js';
+import app from './echoContractWrapper.js';
 
 async function verifyLineSignature(raw, signature, secret) {
   if (!raw || !signature || !secret) return false;
