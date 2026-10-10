@@ -2,14 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
+const guard = readFileSync(new URL('../worker/lineSignatureGuard.js', import.meta.url), 'utf8');
 const wrapper = readFileSync(new URL('../worker/profileSyncWrapper.js', import.meta.url), 'utf8');
 const bootstrap = readFileSync(new URL('../public/bootstrap.js', import.meta.url), 'utf8');
 const index = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const wrangler = readFileSync(new URL('../wrangler.template.toml', import.meta.url), 'utf8');
 const deploy = readFileSync(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
 
-test('StarBeauty deploys through the profile sync wrapper', () => {
-  assert.match(wrangler, /main\s*=\s*"worker\/profileSyncWrapper\.js"/);
+test('StarBeauty deploys through LINE signature guard then profile sync wrapper', () => {
+  assert.match(wrangler, /main\s*=\s*"worker\/lineSignatureGuard\.js"/);
+  assert.match(guard, /import app from '\.\/profileSyncWrapper\.js'/);
+  assert.match(guard, /x-line-signature/);
+  assert.match(guard, /HMAC/);
+  assert.match(guard, /SHA-256/);
   assert.match(wrapper, /member_profiles/);
   assert.match(wrapper, /profileHash/);
   assert.match(wrapper, /\/api\/profile/);
@@ -24,9 +29,11 @@ test('web uploads have explicit allowlist, size validation, and R2 post-upload v
   assert.match(wrapper, /actualSize !== declaredSize/);
 });
 
-test('state-changing browser APIs reject cross-site origins except LINE webhook', () => {
+test('state-changing browser APIs reject cross-site origins except signed LINE webhook', () => {
   assert.match(wrapper, /origin && origin !== url\.origin/);
   assert.match(wrapper, /url\.pathname !== '\/api\/line\/webhook'/);
+  assert.match(guard, /Invalid signature/);
+  assert.match(guard, /LINE 尚未完成設定/);
 });
 
 test('frontend normalizes JSON request Content-Type before app code runs', () => {
