@@ -5,6 +5,8 @@ const SUPER_ADMIN_EMAIL = 'yukidu@gmail.com';
 const ECHO_DEFAULT = 'https://echostars.yukidu.workers.dev';
 const PROFILE_CACHE_TTL_SECONDS = 300;
 const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
+const MAX_LINE_WEBHOOK_BYTES = 1024 * 1024;
+const MAX_LINE_EVENTS_PER_WEBHOOK = 50;
 
 const ALLOWED_EXTENSIONS = new Set([
   'pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'ppt', 'pptx', 'txt', 'rtf',
@@ -204,6 +206,13 @@ async function currentUserId(request, env) {
   if (!row || Number(row.expiresAt) <= Date.now()) return null;
   return String(row.userId);
 }
+async function currentStaff(request, env) {
+  await ensureCoreSchema(request, env);
+  const userId = await currentUserId(request, env);
+  if (!userId) return null;
+  const user = await env.DB.prepare('SELECT id,email,name,role FROM users WHERE id=? LIMIT 1').bind(userId).first();
+  return user && ['teacher', 'admin', 'superadmin'].includes(String(user.role || '')) ? user : null;
+}
 
 async function profileApi(request, env) {
   await ensureCoreSchema(request, env);
@@ -272,6 +281,166 @@ async function verifyCompletedUpload(env, fileId) {
   return '';
 }
 
+function lineFileError(message) {
+  if (!message || message.type !== 'file') return '';
+  const fileName = String(message.fileName || '').trim();
+  const extension = fileExtension(fileName);
+  const size = Number(message.fileSize || 0);
+  if (!fileName || !extension || !ALLOWED_EXTENSIONS.has(extension)) {
+    return '這個檔案格式目前不支援。請改用文件、簡報、試算表、圖片、PDF、ZIP 或常見影片格式。';
+  }
+  if (Number.isFinite(size) && size > MAX_UPLOAD_BYTES) return '單一檔案不可超過 2 GB。';
+  return '';
+}
+async function lineReply(env, replyToken, text) {
+  if (!env.LINE_CHANNEL_ACCESS_TOKEN || !replyToken) return;
+  await fetch('https://api.line.me/v2/bot/message/reply', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.LINE_CHANNEL_ACCESS_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ replyToken, messages: [{ type: 'text', text }] })
+  }).catch(() => {});
+}
+async function lineWebhookPreflight(request, env) {
+  const declaredLength = Number(request.headers.get('Content-Length') || 0);
+  if (declaredLength > MAX_LINE_WEBHOOK_BYTES) return json({ error: 'Webhook payload too large' }, 413);
+
+  const raw = await request.clone().text();
+  if (new TextEncoder().encode(raw).byteLength > MAX_LINE_WEBHOOK_BYTES) return json({ error: 'Webhook payload too large' }, 413);
+  let body;
+  try { body = JSON.parse(raw || '{}'); }
+  catch { return json({ error: 'Webhook JSON 無效' }, 400); }
+
+  const events = Array.isArray(body.events) ? body.events : [];
+  if (events.length > MAX_LINE_EVENTS_PER_WEBHOOK) return json({ error: 'Webhook events too many' }, 413);
+
+  for (const event of events) {
+    const error = lineFileError(event?.message);
+    if (error) {
+      await lineReply(env, event?.replyToken, error);
+      return json({ success: true, rejected: true, reason: 'unsupported_file' });
+    }
+  }
+  return null;
+}
+
+function csvCell(value) {
+  let text = value == null ? '' : String(value);
+  if (/^[=+\-@]/.test(text)) text = `'${text}`;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+function isoTime(value) {
+  const n = Number(value || 0);
+  return n > 0 ? new Date(n).toISOString() : '';
+}
+async function reportOverview(request, env) {
+  const staff = await currentStaff(request, env);
+  if (!staff) return json({ error: '沒有管理權限' }, 403);
+
+  const [studentsRow, assignmentsResult, statusResult] = await Promise.all([
+    env.DB.prepare("SELECT COUNT(*) AS n FROM users WHERE role='student'").first(),
+    env.DB.prepare(`
+      SELECT
+        a.id,a.title,a.courseId,a.dueAt,
+        CASE
+          WHEN a.courseId IS NULL OR NOT EXISTS(SELECT 1 FROM course_members cm0 WHERE cm0.courseId=a.courseId)
+          THEN (SELECT COUNT(*) FROM users u WHERE u.role='student')
+          ELSE (SELECT COUNT(*) FROM course_members cm JOIN users u ON u.id=cm.userId WHERE cm.courseId=a.courseId AND u.role='student')
+        END AS eligibleStudents,
+        (SELECT COUNT(*) FROM submissions s
+          WHERE s.assignmentId=a.id AND s.status<>'draft'
+          AND s.id=(SELECT s2.id FROM submissions s2 WHERE s2.assignmentId=s.assignmentId AND s2.userId=s.userId ORDER BY s2.version DESC,s2.createdAt DESC LIMIT 1)) AS submittedStudents,
+        (SELECT COUNT(*) FROM submissions s
+          WHERE s.assignmentId=a.id AND s.status='approved'
+          AND s.id=(SELECT s2.id FROM submissions s2 WHERE s2.assignmentId=s.assignmentId AND s2.userId=s.userId ORDER BY s2.version DESC,s2.createdAt DESC LIMIT 1)) AS approvedStudents,
+        (SELECT COUNT(*) FROM submissions s
+          WHERE s.assignmentId=a.id AND s.status='submitted'
+          AND s.id=(SELECT s2.id FROM submissions s2 WHERE s2.assignmentId=s.assignmentId AND s2.userId=s.userId ORDER BY s2.version DESC,s2.createdAt DESC LIMIT 1)) AS pendingReview,
+        (SELECT COUNT(*) FROM submissions s
+          WHERE s.assignmentId=a.id AND s.status='needs_revision'
+          AND s.id=(SELECT s2.id FROM submissions s2 WHERE s2.assignmentId=s.assignmentId AND s2.userId=s.userId ORDER BY s2.version DESC,s2.createdAt DESC LIMIT 1)) AS needsRevision,
+        (SELECT COUNT(*) FROM submissions s
+          WHERE s.assignmentId=a.id AND a.dueAt IS NOT NULL AND s.submittedAt>a.dueAt AND s.status<>'draft'
+          AND s.id=(SELECT s2.id FROM submissions s2 WHERE s2.assignmentId=s.assignmentId AND s2.userId=s.userId ORDER BY s2.version DESC,s2.createdAt DESC LIMIT 1)) AS lateStudents
+      FROM assignments a
+      WHERE a.active=1
+      ORDER BY CASE WHEN a.dueAt IS NULL THEN 1 ELSE 0 END,a.dueAt ASC,a.createdAt DESC
+    `).all(),
+    env.DB.prepare(`
+      SELECT s.status,COUNT(*) AS n
+      FROM submissions s
+      WHERE s.status<>'draft'
+        AND s.id=(SELECT s2.id FROM submissions s2 WHERE s2.assignmentId=s.assignmentId AND s2.userId=s.userId ORDER BY s2.version DESC,s2.createdAt DESC LIMIT 1)
+      GROUP BY s.status
+    `).all()
+  ]);
+
+  const assignments = (assignmentsResult.results || []).map(row => {
+    const eligible = Number(row.eligibleStudents || 0);
+    const submitted = Number(row.submittedStudents || 0);
+    return {
+      id: row.id,
+      title: row.title,
+      dueAt: row.dueAt,
+      eligibleStudents: eligible,
+      submittedStudents: submitted,
+      approvedStudents: Number(row.approvedStudents || 0),
+      pendingReview: Number(row.pendingReview || 0),
+      needsRevision: Number(row.needsRevision || 0),
+      lateStudents: Number(row.lateStudents || 0),
+      completionRate: eligible > 0 ? Math.round((submitted / eligible) * 1000) / 10 : 0
+    };
+  });
+  const statuses = Object.fromEntries((statusResult.results || []).map(row => [String(row.status), Number(row.n || 0)]));
+  return json({
+    students: Number(studentsRow?.n || 0),
+    activeAssignments: assignments.length,
+    pendingReview: Number(statuses.submitted || 0),
+    approved: Number(statuses.approved || 0),
+    needsRevision: Number(statuses.needs_revision || 0),
+    rejected: Number(statuses.rejected || 0),
+    assignments
+  });
+}
+
+async function submissionsCsv(request, env) {
+  const staff = await currentStaff(request, env);
+  if (!staff) return json({ error: '沒有管理權限' }, 403);
+  const { results } = await env.DB.prepare(`
+    SELECT s.id,s.version,s.status,s.source,s.submittedAt,s.reviewedAt,s.score,s.feedback,
+      s.receiptDate,s.merchant,s.amount,s.invoiceNumber,s.category,
+      u.name AS studentName,u.email AS studentEmail,
+      a.title AS assignmentTitle,c.title AS courseTitle
+    FROM submissions s
+    JOIN users u ON u.id=s.userId
+    JOIN assignments a ON a.id=s.assignmentId
+    LEFT JOIN courses c ON c.id=a.courseId
+    WHERE s.status<>'draft'
+    ORDER BY COALESCE(s.submittedAt,s.createdAt) DESC
+    LIMIT 10000
+  `).all();
+  const columns = [
+    '作業名稱','課程','學員姓名','Email','版本','來源','狀態','繳交時間','審核時間','分數','老師回覆',
+    '收據日期','商家','金額','發票號碼','分類','Submission ID'
+  ];
+  const rows = (results || []).map(row => [
+    row.assignmentTitle,row.courseTitle,row.studentName,row.studentEmail,row.version,row.source,row.status,
+    isoTime(row.submittedAt),isoTime(row.reviewedAt),row.score,row.feedback,row.receiptDate,row.merchant,row.amount,row.invoiceNumber,row.category,row.id
+  ]);
+  const csv = '\uFEFF' + [columns, ...rows].map(row => row.map(csvCell).join(',')).join('\r\n');
+  const date = new Date().toISOString().slice(0, 10);
+  return new Response(csv, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="starbeauty-submissions-${date}.csv"`,
+      'Cache-Control': 'no-store'
+    }
+  });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -293,6 +462,17 @@ export default {
     }
     if (url.pathname === '/api/profile' && method === 'GET') {
       return withSecurityHeaders(await profileApi(request, env));
+    }
+    if (url.pathname === '/api/admin/reports/overview' && method === 'GET') {
+      return withSecurityHeaders(await reportOverview(request, env));
+    }
+    if (url.pathname === '/api/admin/reports/submissions.csv' && method === 'GET') {
+      return withSecurityHeaders(await submissionsCsv(request, env));
+    }
+    if (url.pathname === '/api/line/webhook' && method === 'POST') {
+      const blocked = await lineWebhookPreflight(request, env);
+      if (blocked) return withSecurityHeaders(blocked);
+      return withSecurityHeaders(await core.fetch(request, env));
     }
     if (url.pathname === '/api/uploads/start' && method === 'POST') {
       const blocked = await uploadStartGuard(request, env);
