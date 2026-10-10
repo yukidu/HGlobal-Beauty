@@ -1,0 +1,12 @@
+{
+  "name": "starbeauty",
+  "private": true,
+  "version": "1.0.0",
+  "description": "美力之星 StarBeauty 學員作業與 LINE 繳交平台",
+  "scripts": {
+    "check": "node --check worker/index.js && node --check public/app.js"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
