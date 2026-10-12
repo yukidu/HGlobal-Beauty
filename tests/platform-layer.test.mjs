@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 
 const app=readFileSync(new URL('../public/app.js',import.meta.url),'utf8');
 const platform=readFileSync(new URL('../public/platform.js',import.meta.url),'utf8');
+const index=readFileSync(new URL('../public/index.html',import.meta.url),'utf8');
 const pkg=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
 
 test('Web production has no Capacitor/Firebase/native dependency cost',()=>{
@@ -27,6 +28,7 @@ test('platform detection initializes once without listeners, polling, or render-
   assert.match(platform,/export const device=Object\.freeze/);
   assert.doesNotMatch(platform,/addEventListener/);
   assert.doesNotMatch(platform,/setInterval|setTimeout/);
+  assert.doesNotMatch(platform,/fetch\(/);
 });
 
 test('current Web APIs remain the default and native support is opt-in only',()=>{
@@ -37,6 +39,8 @@ test('current Web APIs remain the default and native support is opt-in only',()=
   assert.match(platform,/if\(nativeAdapter\?/);
 });
 
-test('PWA service worker is not rewritten by this change',()=>{
-  assert.ok(true,'repository currently has no service worker file to rewrite');
+test('existing Web entry point remains unchanged and no Service Worker behavior is invented',()=>{
+  assert.match(index,/script src="\/bootstrap\.js"/);
+  assert.match(index,/script type="module" src="\/app\.js"/);
+  assert.doesNotMatch(index,/serviceWorker\.register/);
 });
