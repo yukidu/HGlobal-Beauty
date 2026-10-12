@@ -7,7 +7,7 @@ export const appConfig=Object.freeze({
 });
 
 const ua=navigator.userAgent||'';
-const standalone=Boolean(matchMedia?.('(display-mode: standalone)')?.matches||navigator.standalone===true);
+const standalone=Boolean(globalThis.matchMedia?.('(display-mode: standalone)')?.matches||navigator.standalone===true);
 export const device=Object.freeze({
   ios:/iPad|iPhone|iPod/.test(ua)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1),
   android:/Android/i.test(ua),
