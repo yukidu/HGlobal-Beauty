@@ -1,6 +1,8 @@
 # 美力之星 StarBeauty
 
-獨立 GitHub 專案：`yukidu/starbeauty`
+獨立 GitHub 專案：`yukidu/HGlobal-Beauty`
+
+GitHub：`https://github.com/yukidu/HGlobal-Beauty`
 
 正式部署名稱：`starbeauty`
 
